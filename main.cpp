@@ -1,96 +1,79 @@
-// #include <assert.h>
-// #include <stdio.h>
-// #include <fcntl.h>
-// #include <unistd.h>
-// #include <uv.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <uv.h>
 
+uv_loop_t loop;
 
-// // gcc -Wall main.c -o uvcat -luv
-// // ./uvcat ./1.txt
+static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf)
+{
+  static char buffer[1 << 16];
+  *buf = uv_buf_init(buffer, 1 << 16);
+}
 
+static void timer_cb(uv_timer_t* handle) {
+  printf("timer_cb val: %s \n", handle->data);
+}
 
-// //void on_read(uv_fs_t *req);
-// //
-// //uv_fs_t open_req;
-// //uv_fs_t read_req;
-// //uv_fs_t write_req;
-// //
-// //static char buffer[1024];
-// //
-// //static uv_buf_t iov;
-// //
-// //void on_write(uv_fs_t *req) {
-// //  if (req->result < 0) {
-// //    fprintf(stderr, "Write error: %s\n", uv_strerror((int) req->result));
-// //  } else {
-// //    uv_fs_read(uv_default_loop(), &read_req, open_req.result, &iov, 1, -1, on_read);
-// //  }
-// //}
-// //
-// //void on_read(uv_fs_t *req) {
-// //  if (req->result < 0) {
-// //    fprintf(stderr, "Read error: %s\n", uv_strerror(req->result));
-// //  } else if (req->result == 0) {
-// //    uv_fs_t close_req;
-// //    // synchronous
-// //    uv_fs_close(uv_default_loop(), &close_req, open_req.result, NULL);
-// //    printf("******Read file done!!!");
-// //  } else if (req->result > 0) {
-// //    iov.len = req->result;  // 读取数据的长度(数据读写完毕才触发回调)
-// //    // 因为cat功能，所以将读取的数据写入控制台
-// //    uv_fs_write(uv_default_loop(), &write_req, 1, &iov, 1, -1, on_write);
-// //  }
-// //}
-// //
-// //void on_open(uv_fs_t *req) {
-// //  // The request passed to the callback is the same as the one the call setup
-// //  // function was passed.
-// //  assert(req == &open_req);
-// //  if (req->result >= 0) {
-// //    iov = uv_buf_init(buffer, sizeof(buffer));
-// //    uv_fs_read(uv_default_loop(), &read_req, req->result,
-// //               &iov, 1, -1, on_read);
-// //  } else {
-// //    fprintf(stderr, "error opening file: %s\n", uv_strerror((int) req->result));
-// //  }
-// //}
+#define GET_ARRAY_LEN(array,len){len = (sizeof(array) / sizeof(array[0]));}
 
-// static int count = 0;
-
-// static void timer_cb1(uv_timer_t* handle) {
-//   printf("timer_cb1 count: %d \n", ++count);
-// }
-// static void timer_cb2(uv_timer_t* handle) {
-//   printf("timer_cb2 count: %d \n", --count);
-// }
-
-// int main(int argc, char **argv) {
-//   //  printf("******Read file done!!!");
-//   //  argv[1]
-// //  char p[] = "/Users/wangwenjie/code/cpp-test/hilibuv/1.txt";
-// //  uv_fs_open(uv_default_loop(), &open_req, p, O_RDONLY, 0, on_open);
-
-// //  uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+static void read_stdin(uv_stream_t *stream, ssize_t nread, const uv_buf_t* buf)
+{
+  if (nread < 0) {
+    // stdin closed
+    uv_read_stop(stream);
+    return;
+  }
   
-// //  uv_fs_req_cleanup(&open_req);
-// //  uv_fs_req_cleanup(&read_req);
-// //  uv_fs_req_cleanup(&write_req);
+  char delim[] = " ";
+  char str[] = "";
+  char *p = NULL;
+  char *pre = NULL;
+  int timeout = 0;
 
-
-//   int r;
-//   uv_loop_t *loop;
-//   loop = uv_default_loop();
-//   uv_timer_t timer_handle1;
-//   uv_timer_t timer_handle2;
-
-//   uv_timer_init(loop, &timer_handle1);
-//   uv_timer_init(loop, &timer_handle2);
-//   uv_timer_start(&timer_handle1, timer_cb1, 1, 1000 * 5);
-//   uv_timer_start(&timer_handle2, timer_cb2, 1, 1000 * 3);
+  p = strtok(buf->base, delim);
+  while(true) {
+    if (p == NULL) {
+      timeout = atoi(pre);
+      break;
+    }
+    if (pre != NULL) {
+      strcpy (str, pre);
+    }
+    pre = p;
+    p = strtok(NULL, delim);
+  }
   
-//   r = uv_run(loop, UV_RUN_DEFAULT);
+  if (strlen(str) == 0) {
+    strcpy (str, pre);
+    timeout = 0;
+  }
+  pre = NULL;
   
-//   printf("r => %d", r);
+  uv_timer_t timer_handle;
+  uv_timer_init(&loop, &timer_handle);
+  timer_handle.data = str;
+  uv_timer_start(&timer_handle, timer_cb, timeout, 0);
 
-//   return 0;
-// }
+  printf("str => %s", str);
+  printf("pre => %s", pre);
+  printf("timeout => %d\n", timeout);
+  printf("==============================\n");
+}
+
+int main(int argc, char *argv[])
+{
+  /* Initialize loop */
+  uv_loop_init(&loop);
+
+  /* Input */
+  uv_tty_t input;
+  uv_tty_init(&loop, &input, STDIN_FILENO, 1);
+  uv_read_start((uv_stream_t *)&input, alloc_buffer, read_stdin);
+
+  /* Run loop */
+  uv_run(&loop, UV_RUN_DEFAULT);
+
+  return 0;
+}
